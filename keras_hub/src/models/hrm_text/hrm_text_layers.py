@@ -322,13 +322,14 @@ class HrmTextDecoderBlock(keras.layers.Layer):
 class HrmTextStack(keras.layers.Layer):
     """One shared H or L stack with logical cache-slot indexing."""
 
-    def __init__(self, num_layers, **block_kwargs):
+    def __init__(self, num_layers, rematerialization=False, **block_kwargs):
         layer_kwargs = {}
         for key in ("name", "dtype"):
             if key in block_kwargs:
                 layer_kwargs[key] = block_kwargs.pop(key)
         super().__init__(**layer_kwargs)
         self.num_layers = num_layers
+        self.rematerialization = rematerialization
         self.block_kwargs = block_kwargs
         self.layers = [
             HrmTextDecoderBlock(
@@ -353,7 +354,12 @@ class HrmTextStack(keras.layers.Layer):
         updated_cache = [] if cache is not None else None
         for index, layer in enumerate(self.layers):
             if cache is None:
-                hidden_states = layer(hidden_states, attention_mask)
+                if self.rematerialization:
+                    hidden_states = keras.remat(layer)(
+                        hidden_states, attention_mask
+                    )
+                else:
+                    hidden_states = layer(hidden_states, attention_mask)
             else:
                 hidden_states, layer_cache = layer(
                     hidden_states,

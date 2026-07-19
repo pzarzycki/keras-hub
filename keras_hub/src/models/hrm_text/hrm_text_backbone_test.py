@@ -101,6 +101,16 @@ class HrmTextBackboneTest(TestCase):
         self.assertEqual(config["initializer_range"], 0.03)
         self.assertAllClose(config["embedding_scale"], 1.0 / 0.03)
 
+    def test_rematerialization_config(self):
+        backbone = HrmTextBackbone(
+            **self.init_kwargs,
+            rematerialization=True,
+        )
+        self.assertTrue(backbone.rematerialization)
+        self.assertTrue(backbone.L_module.rematerialization)
+        self.assertTrue(backbone.H_module.rematerialization)
+        self.assertTrue(backbone.get_config()["rematerialization"])
+
     def test_l_bp_cycles_validation(self):
         with self.assertRaises(ValueError):
             HrmTextBackbone(**self.init_kwargs, l_bp_cycles=[1, 1, 1])
@@ -108,3 +118,39 @@ class HrmTextBackboneTest(TestCase):
             HrmTextBackbone(**self.init_kwargs, l_bp_cycles=[-1])
         with self.assertRaises(ValueError):
             HrmTextBackbone(**self.init_kwargs, l_bp_cycles=[1.5])
+
+    def test_default_lora_layer_names(self):
+        backbone = HrmTextBackbone(**self.init_kwargs)
+        self.assertEqual(
+            backbone.default_lora_layer_names(),
+            [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+        )
+
+    def test_enable_lora_uses_hrm_projection_names(self):
+        backbone = HrmTextBackbone(**self.init_kwargs)
+        backbone.enable_lora(rank=2, lora_alpha=4)
+        self.assertGreater(len(backbone._lora_enabled_layers), 0)
+        all_layers = [
+            layer
+            for layer in backbone._flatten_layers(include_self=False)
+            if layer.weights
+        ]
+        enabled_layers = [
+            all_layers[index] for index in backbone._lora_enabled_layers
+        ]
+        self.assertTrue(
+            all(
+                layer.name in backbone.default_lora_layer_names()
+                for layer in enabled_layers
+            )
+        )
+        self.assertTrue(all(layer.trainable for layer in enabled_layers))
+        self.assertTrue(all(layer.lora_alpha == 4 for layer in enabled_layers))

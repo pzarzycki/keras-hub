@@ -192,7 +192,7 @@ class Backbone(keras.Model):
         """Returns list of layer names which are to be LoRA-fied."""
         return ["query_dense", "value_dense", "query", "value"]
 
-    def enable_lora(self, rank, target_layer_names=None):
+    def enable_lora(self, rank, target_layer_names=None, lora_alpha=None):
         """Enable Lora on the backbone.
 
         Calling this method will freeze all weights on the backbone,
@@ -205,6 +205,8 @@ class Backbone(keras.Model):
                 apply LoRA to. If `None`, this will be populated with the
                 default LoRA layer names as returned by
                 `backbone.default_lora_layer_names()`.
+            lora_alpha: Optional scaling factor for the LoRA update. If
+                `None`, Keras uses the layer default of `rank`.
         """
         if target_layer_names is None:
             target_layer_names = self.default_lora_layer_names()
@@ -220,7 +222,7 @@ class Backbone(keras.Model):
                 if layer.name == name:
                     if hasattr(layer, "enable_lora"):
                         layer.trainable = True
-                        layer.enable_lora(rank)
+                        layer.enable_lora(rank, lora_alpha=lora_alpha)
                         self._lora_enabled_layers.append(i)
 
     def save_lora_weights(self, filepath):

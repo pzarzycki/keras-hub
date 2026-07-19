@@ -101,6 +101,9 @@ class HrmTextBackbone(Backbone):
             When ``None``, defaults to ``1 / initializer_range``.
         tie_word_embeddings: Whether input and output embeddings are tied.
             Defaults to ``False``.
+        rematerialization: Whether to checkpoint every decoder block during
+            training and recompute its activations in the backward pass.
+            Defaults to ``False``. It is ignored for cached generation.
         dtype: Dtype policy for the backbone.
 
     Examples:
@@ -143,6 +146,7 @@ class HrmTextBackbone(Backbone):
         initializer_range=0.02,
         embedding_scale=None,
         tie_word_embeddings=False,
+        rematerialization=False,
         dtype=None,
         **kwargs,
     ):
@@ -182,6 +186,7 @@ class HrmTextBackbone(Backbone):
             else embedding_scale
         )
         self.tie_word_embeddings = tie_word_embeddings
+        self.rematerialization = rematerialization
         kernel_initializer = keras.initializers.RandomNormal(
             stddev=initializer_range
         )
@@ -200,6 +205,7 @@ class HrmTextBackbone(Backbone):
             "rope_theta": rope_theta,
             "rms_norm_epsilon": rms_norm_epsilon,
             "kernel_initializer": kernel_initializer,
+            "rematerialization": rematerialization,
         }
         self.L_module = HrmTextStack(
             num_layers_per_stack, name="L_module", dtype=dtype, **block_kwargs
@@ -236,6 +242,25 @@ class HrmTextBackbone(Backbone):
     @property
     def cache_slots(self):
         return self.num_layers_per_stack * self.h_cycles * (self.l_cycles + 1)
+
+    def default_lora_layer_names(self):
+        """Returns the HRM-Text attention and SwiGLU projection names.
+
+        The generic backbone defaults target names used by other architectures
+        (for example ``query_dense``), while HRM-Text uses explicit projection
+        names. Returning these names makes ``enable_lora(rank)`` a useful
+        memory-constrained fine-tuning baseline without requiring callers to
+        inspect the implementation.
+        """
+        return [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
 
     def _forward(self, token_ids, padding_mask, token_type_ids):
         attention_mask = self.attention_mask(token_type_ids, padding_mask)
@@ -332,6 +357,7 @@ class HrmTextBackbone(Backbone):
                 "initializer_range": self.initializer_range,
                 "embedding_scale": self.embedding_scale,
                 "tie_word_embeddings": self.tie_word_embeddings,
+                "rematerialization": self.rematerialization,
             }
         )
         return config

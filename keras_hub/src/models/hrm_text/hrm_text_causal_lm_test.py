@@ -227,6 +227,32 @@ class HrmTextCausalLMTest(TestCase):
         )
 
     @pytest.mark.large
+    def test_full_checkpoint_round_trip(self):
+        model = HrmTextCausalLM(**self.init_kwargs)
+        model.compile(
+            optimizer=keras.optimizers.AdamW(learning_rate=0.001),
+            sampler="greedy",
+        )
+        model.fit(
+            {
+                "prefix": [" airplane", " airplane"],
+                "response": [" at airport", " at airport"],
+            },
+            batch_size=2,
+            epochs=1,
+            verbose=0,
+        )
+        expected = model(self.input_data)
+        checkpoint = os.path.join(self.get_temp_dir(), "checkpoint.keras")
+        model.save(checkpoint)
+        restored = keras.saving.load_model(checkpoint)
+        self.assertAllClose(expected, restored(self.input_data))
+        self.assertEqual(
+            ops.convert_to_numpy(model.optimizer.iterations),
+            ops.convert_to_numpy(restored.optimizer.iterations),
+        )
+
+    @pytest.mark.large
     def test_local_preset_round_trip(self):
         model = HrmTextCausalLM(**self.init_kwargs)
         expected = model(self.input_data)
