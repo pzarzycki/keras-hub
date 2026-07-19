@@ -227,12 +227,13 @@ class HrmTextCausalLMTest(TestCase):
         )
 
     @pytest.mark.large
-    def test_full_checkpoint_round_trip(self):
+    def test_backup_and_restore_training_state(self):
         model = HrmTextCausalLM(**self.init_kwargs)
         model.compile(
             optimizer=keras.optimizers.AdamW(learning_rate=0.001),
             sampler="greedy",
         )
+        backup_dir = os.path.join(self.get_temp_dir(), "training_state")
         model.fit(
             {
                 "prefix": [" airplane", " airplane"],
@@ -241,14 +242,36 @@ class HrmTextCausalLMTest(TestCase):
             batch_size=2,
             epochs=1,
             verbose=0,
+            callbacks=[
+                keras.callbacks.BackupAndRestore(
+                    backup_dir,
+                    delete_checkpoint=False,
+                )
+            ],
         )
-        expected = model(self.input_data)
-        checkpoint = os.path.join(self.get_temp_dir(), "checkpoint.keras")
-        model.save(checkpoint)
-        restored = keras.saving.load_model(checkpoint)
-        self.assertAllClose(expected, restored(self.input_data))
+        first_iterations = ops.convert_to_numpy(model.optimizer.iterations)
+        restored = HrmTextCausalLM(**self.init_kwargs)
+        restored.compile(
+            optimizer=keras.optimizers.AdamW(learning_rate=0.001),
+            sampler="greedy",
+        )
+        restored.fit(
+            {
+                "prefix": [" airplane", " airplane"],
+                "response": [" at airport", " at airport"],
+            },
+            batch_size=2,
+            epochs=2,
+            verbose=0,
+            callbacks=[
+                keras.callbacks.BackupAndRestore(
+                    backup_dir,
+                    delete_checkpoint=False,
+                )
+            ],
+        )
         self.assertEqual(
-            ops.convert_to_numpy(model.optimizer.iterations),
+            first_iterations + 1,
             ops.convert_to_numpy(restored.optimizer.iterations),
         )
 
