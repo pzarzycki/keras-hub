@@ -47,7 +47,7 @@ class HrmTextCausalLMTest(TestCase):
             vocabulary[token] = len(vocabulary)
         self.preprocessor = HrmTextCausalLMPreprocessor(
             HrmTextTokenizer(vocabulary=vocabulary, merges=self.merges),
-            sequence_length=7,
+            sequence_length=9,
         )
         self.backbone = HrmTextBackbone(
             vocabulary_size=self.preprocessor.tokenizer.vocabulary_size(),
@@ -58,7 +58,7 @@ class HrmTextCausalLMTest(TestCase):
             head_dim=4,
             h_cycles=2,
             l_cycles=2,
-            max_sequence_length=8,
+            max_sequence_length=12,
         )
         self.init_kwargs = {
             "backbone": self.backbone,
@@ -72,12 +72,16 @@ class HrmTextCausalLMTest(TestCase):
             cls=HrmTextCausalLM,
             init_kwargs=self.init_kwargs,
             train_data=self.train_data,
-            expected_output_shape=(2, 7, self.backbone.vocabulary_size),
+            expected_output_shape=(2, 9, self.backbone.vocabulary_size),
         )
 
     def test_prefix_lm_response_weights(self):
         inputs, _, sample_weight = self.preprocessor(
-            {"prefix": [" airplane"], "response": [" at airport"]}
+            {
+                "instruction": [" airplane"],
+                "response": [" at airport"],
+                "condition": ["direct"],
+            }
         )
         self.assertEqual(inputs["token_type_ids"][0, 0], 1)
         self.assertTrue(
@@ -185,8 +189,9 @@ class HrmTextCausalLMTest(TestCase):
             return model
 
         train_data = {
-            "prefix": [" airplane", " airplane"],
+            "instruction": [" airplane", " airplane"],
             "response": [" at airport", " at airport"],
+            "condition": ["direct", "direct"],
         }
         frozen_model = make_model([0, 0])
         frozen_before = [
@@ -236,8 +241,9 @@ class HrmTextCausalLMTest(TestCase):
         backup_dir = os.path.join(self.get_temp_dir(), "training_state")
         model.fit(
             {
-                "prefix": [" airplane", " airplane"],
+                "instruction": [" airplane", " airplane"],
                 "response": [" at airport", " at airport"],
+                "condition": ["direct", "direct"],
             },
             batch_size=2,
             epochs=1,
@@ -257,8 +263,9 @@ class HrmTextCausalLMTest(TestCase):
         )
         restored.fit(
             {
-                "prefix": [" airplane", " airplane"],
+                "instruction": [" airplane", " airplane"],
                 "response": [" at airport", " at airport"],
+                "condition": ["direct", "direct"],
             },
             batch_size=2,
             epochs=2,

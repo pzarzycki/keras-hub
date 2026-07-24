@@ -19,12 +19,11 @@ class HrmTextCausalLM(CausalLM):
     This task pairs :class:`HrmTextBackbone` with an LM head and KerasHub's
     sampler interface. It supports ordinary causal training as well as the
     PrefixLM format used to pretrain HRM-Text. When a preprocessor is attached,
-    plain strings are causal examples and dictionaries with ``prefix`` and
-    ``response`` are packed as PrefixLM examples.
+    plain strings are causal examples and dictionaries with ``instruction``,
+    ``response``, and ``condition`` are packed as PrefixLM examples.
 
-    Condition tokens such as the official ``direct`` or ``synth,cot`` tokens
-    belong inside the PrefixLM prefix. They are prompt-formatting inputs, not
-    separate recurrent state.
+    A condition label selects the official PrefixLM control token. It is a
+    prompt-formatting input, not separate recurrent state.
 
     The official 1B weights are not bundled with the source distribution. Use
     the conversion script to create a local preset, then load it with
@@ -52,8 +51,9 @@ class HrmTextCausalLM(CausalLM):
     response tokens are trained causally.
     ```python
     examples = {
-        "prefix": ["Question: What is 2 + 2?\\nAnswer:"],
+        "instruction": ["Question: What is 2 + 2?\\nAnswer:"],
         "response": [" 4"],
+        "condition": ["direct"],
     }
     model.fit(examples, batch_size=1)
     ```

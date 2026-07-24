@@ -20,18 +20,17 @@ class HrmTextCausalLMPreprocessor(CausalLMPreprocessor):
     """Preprocesses causal and PrefixLM data for `HrmTextCausalLM`.
 
     A plain string is treated as causal language-model text. For PrefixLM
-    training, pass a dictionary containing ``prefix`` and ``response``. Only
-    response-token labels receive training weight; prefix tokens can attend to
-    one another bidirectionally. Place official condition tokens inside the
-    ``prefix`` string, after ``<|im_start|>``; for example, the upstream
-    ``synth,cot`` condition begins with
-    ``<|im_start|><|quad_end|><|object_ref_end|>``.
+    training, pass a dictionary containing ``instruction``, ``response``, and
+    ``condition``. Only response-token labels receive training weight;
+    instruction tokens can attend to one another bidirectionally. The
+    serialized PrefixLM sequence follows the upstream SFT builder exactly:
+    ``<|im_start|><condition>instruction<|im_end|>response<|box_end|>``.
 
     Args:
         tokenizer: An instance of `keras_hub.models.HrmTextTokenizer`.
         sequence_length: Packed sequence length. Defaults to ``128``.
         add_start_token: Whether to prepend ``<|im_start|>``. Defaults to
-            ``True``.
+            ``True``. PrefixLM dictionaries require it.
         add_end_token: Whether to append ``<|box_end|>``. Defaults to
             ``True``.
 
@@ -47,8 +46,9 @@ class HrmTextCausalLMPreprocessor(CausalLMPreprocessor):
 
     # PrefixLM inputs: only response labels receive nonzero sample weights.
     x, y, sample_weight = preprocessor({
-        "prefix": ["Question: What is 2 + 2?\\nAnswer:"],
+        "instruction": ["Question: What is 2 + 2?\\nAnswer:"],
         "response": [" 4"],
+        "condition": ["direct"],
     })
     ```
     """
@@ -88,17 +88,67 @@ class HrmTextCausalLMPreprocessor(CausalLMPreprocessor):
         if getattr(instruction, "dtype", None) == tf.string:
             return tf.strings.join([prefix, instruction, suffix])
         raise ValueError("HRM-Text instructions must be strings.")
-
     def build(self, input_shape):
         self.packer = MultiSegmentPacker(
             start_value=self.tokenizer.start_token_id,
-            sep_value=self.tokenizer.end_token_id,
+            sep_value=self.tokenizer.prefix_end_token_id,
             end_value=self.tokenizer.end_token_id,
             pad_value=self.tokenizer.pad_token_id,
             sequence_length=self.sequence_length,
             truncate="waterfall",
         )
         self.built = True
+
+    def _format_instruction_python(self, instruction, condition):
+        if isinstance(condition, str):
+            condition = [condition] * len(instruction)
+        if len(condition) != len(instruction):
+            raise ValueError(
+                "`condition` must have one value per `instruction`."
+            )
+        try:
+            controls = [self.condition_tokens[value] for value in condition]
+        except KeyError as error:
+            raise ValueError(
+                "Unknown HRM-Text condition. Expected one of "
+                f"{sorted(self.condition_tokens)}."
+            ) from error
+        return [control + value for control, value in zip(controls, instruction)]
+
+    def _format_instruction_tf(self, instruction, condition):
+        instruction = tf.convert_to_tensor(instruction, dtype=tf.string)
+        condition = tf.convert_to_tensor(condition, dtype=tf.string)
+        if condition.shape.rank == 0:
+            condition = tf.fill(tf.shape(instruction), condition)
+        shape_assertion = tf.debugging.assert_equal(
+            tf.shape(condition),
+            tf.shape(instruction),
+            message="`condition` must have one value per `instruction`.",
+        )
+        choices = tf.constant(list(self.condition_tokens))
+        controls = tf.constant(list(self.condition_tokens.values()))
+        matches = tf.equal(tf.expand_dims(condition, -1), choices)
+        valid = tf.reduce_any(matches, axis=-1)
+        valid_assertion = tf.debugging.assert_equal(
+            tf.reduce_all(valid),
+            True,
+            message=(
+                "Unknown HRM-Text condition. Expected one of "
+                f"{sorted(self.condition_tokens)}."
+            ),
+        )
+        with tf.control_dependencies([shape_assertion, valid_assertion]):
+            index = tf.argmax(tf.cast(matches, tf.int32), axis=-1)
+            return tf.strings.join([tf.gather(controls, index), instruction])
+
+    @staticmethod
+    def _require_prefix_lm_fields(x):
+        required = {"instruction", "response", "condition"}
+        if missing := required - x.keys():
+            raise ValueError(
+                "PrefixLM data requires fields "
+                f"{sorted(required)}; missing {sorted(missing)}."
+            )
 
     def _pack(self, segments, sequence_length, add_end_value):
         token_ids, segment_ids = self.packer(
@@ -117,8 +167,17 @@ class HrmTextCausalLMPreprocessor(CausalLMPreprocessor):
             self.build(None)
         sequence_length = sequence_length or self.sequence_length
         if isinstance(x, dict):
+            self._require_prefix_lm_fields(x)
+            if not self.add_start_token or not self.add_end_token:
+                raise ValueError(
+                    "PrefixLM dictionaries require start and end tokens."
+                )
             segments = (
-                self.tokenizer(x["prefix"]),
+                self.tokenizer(
+                    self._format_instruction_python(
+                        x["instruction"], x["condition"]
+                    )
+                ),
                 self.tokenizer(x["response"]),
             )
             prefix_lm = True
@@ -151,8 +210,17 @@ class HrmTextCausalLMPreprocessor(CausalLMPreprocessor):
             self.build(None)
         sequence_length = sequence_length or self.sequence_length
         if isinstance(x, dict):
+            self._require_prefix_lm_fields(x)
+            if not self.add_start_token or not self.add_end_token:
+                raise ValueError(
+                    "PrefixLM dictionaries require start and end tokens."
+                )
             segments = (
-                self.tokenizer(x["prefix"]),
+                self.tokenizer(
+                    self._format_instruction_tf(
+                        x["instruction"], x["condition"]
+                    )
+                ),
                 self.tokenizer(x["response"]),
             )
             prefix_lm = True
