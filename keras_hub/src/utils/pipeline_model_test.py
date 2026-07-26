@@ -77,6 +77,21 @@ class FunctionalPipeline(PipelineModel):
         return cls(**config)
 
 
+class StringPyDataset(keras.utils.PyDataset):
+    def __init__(self, x, y=None):
+        super().__init__()
+        self.x = x
+        self.y = y
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, index):
+        if self.y is None:
+            return self.x
+        return self.x, self.y
+
+
 class TestNoopPipelineModel(TestCase):
     def test_fit(self):
         x = np.random.uniform(size=(8, 5))
@@ -155,6 +170,36 @@ class TestFeaturePreprocessingModel(TestCase):
         # Without sample weight.
         model.fit(x=x, y=y, batch_size=8)
         model.fit(tf.data.Dataset.from_tensor_slices((x, y)).batch(8))
+
+    def test_fit_with_pydataset_preprocessing(self):
+        x = tf.strings.as_string(np.random.uniform(size=(8, 5)))
+        y = np.random.uniform(size=(8, 1))
+        model = FeaturePipeline()
+        model.compile(loss="mse")
+        model.fit(StringPyDataset(x, y))
+
+    def test_pydataset_validation_preprocessing(self):
+        x = tf.strings.as_string(np.random.uniform(size=(8, 5)))
+        y = np.random.uniform(size=(8, 1))
+        model = FeaturePipeline()
+        model.compile(loss="mse")
+        model.fit(
+            StringPyDataset(x, y),
+            validation_data=StringPyDataset(x, y),
+        )
+
+    def test_evaluate_with_pydataset_preprocessing(self):
+        x = tf.strings.as_string(np.random.uniform(size=(8, 5)))
+        y = np.random.uniform(size=(8, 1))
+        model = FeaturePipeline()
+        model.compile(loss="mse")
+        model.evaluate(StringPyDataset(x, y))
+
+    def test_predict_with_pydataset_preprocessing(self):
+        x = tf.strings.as_string(np.random.uniform(size=(8, 5)))
+        model = FeaturePipeline()
+        model.compile(loss="mse")
+        model.predict(StringPyDataset(x))
 
     def test_evaluate_with_preprocessing(self):
         x = tf.strings.as_string(np.random.uniform(size=(100, 5)))

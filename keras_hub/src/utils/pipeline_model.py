@@ -13,6 +13,36 @@ except ImportError:
     tf = None
 
 
+class _PreprocessedPyDataset(keras.utils.PyDataset):
+    """Apply a pipeline preprocessor to batches from a Keras PyDataset."""
+
+    def __init__(self, dataset, preprocessor):
+        super().__init__()
+        self.dataset = dataset
+        self.preprocessor = preprocessor
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        x, y, sample_weight = keras.utils.unpack_x_y_sample_weight(
+            self.dataset[index]
+        )
+        batch = self.preprocessor(x, y, sample_weight)
+        # Keras PyDataset adapters require a one-element tuple for an
+        # input-only batch, unlike tf.data.Dataset.
+        if not isinstance(batch, (tuple, dict)):
+            batch = (batch,)
+        return batch
+
+    def on_epoch_end(self):
+        self.dataset.on_epoch_end()
+
+
+def _is_pydataset(x):
+    return isinstance(x, keras.utils.PyDataset)
+
+
 def _convert_inputs_to_dataset(
     x=None,
     y=None,
@@ -23,7 +53,7 @@ def _convert_inputs_to_dataset(
 
     This is a stand in for the `TensorLikeDataAdapter` in core Keras.
     """
-    if isinstance(x, tf.data.Dataset):
+    if isinstance(x, tf.data.Dataset) or _is_pydataset(x):
         if y is not None:
             raise ValueError(
                 "When `x` is a `tf.data.Dataset`, please do not provide "
@@ -69,6 +99,14 @@ def _convert_inputs_to_dataset(
         raise e
 
     return ds.batch(batch_size or 32)
+
+
+def _preprocess_dataset(dataset, preprocessor):
+    if _is_pydataset(dataset):
+        return _PreprocessedPyDataset(dataset, preprocessor)
+    return dataset.map(
+        preprocessor, num_parallel_calls=tf.data.AUTOTUNE
+    ).prefetch(tf.data.AUTOTUNE)
 
 
 def _train_validation_split(arrays, validation_split):
@@ -161,12 +199,12 @@ class PipelineModel(keras.Model):
             )
 
         x = _convert_inputs_to_dataset(x, y, sample_weight, batch_size)
-        x = x.map(
-            self.preprocess_samples, num_parallel_calls=tf.data.AUTOTUNE
-        ).prefetch(tf.data.AUTOTUNE)
+        x = _preprocess_dataset(x, self.preprocess_samples)
 
         if validation_data is not None:
-            if not isinstance(validation_data, tf.data.Dataset):
+            if not isinstance(
+                validation_data, (tf.data.Dataset, keras.utils.PyDataset)
+            ):
                 (vx, vy, vsw) = keras.utils.unpack_x_y_sample_weight(
                     validation_data
                 )
@@ -197,9 +235,7 @@ class PipelineModel(keras.Model):
         # needs preprocessing.
         kwargs.pop("_use_cached_eval_dataset", None)
         x = _convert_inputs_to_dataset(x, y, sample_weight, batch_size)
-        x = x.map(
-            self.preprocess_samples, num_parallel_calls=tf.data.AUTOTUNE
-        ).prefetch(tf.data.AUTOTUNE)
+        x = _preprocess_dataset(x, self.preprocess_samples)
         return super().evaluate(
             x=x,
             y=None,
@@ -214,9 +250,7 @@ class PipelineModel(keras.Model):
         **kwargs,
     ):
         x = _convert_inputs_to_dataset(x, None, None, batch_size)
-        x = x.map(
-            self.preprocess_samples, num_parallel_calls=tf.data.AUTOTUNE
-        ).prefetch(tf.data.AUTOTUNE)
+        x = _preprocess_dataset(x, self.preprocess_samples)
         return super().predict(
             x=x,
             batch_size=None,
